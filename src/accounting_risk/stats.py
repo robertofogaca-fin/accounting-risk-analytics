@@ -13,7 +13,7 @@ o usuário com o perfil de dígitos *das suas próprias contas* (baseline empír
 import numpy as np
 import pandas as pd
 
-from .plano_contas import CODIGOS
+from .plano_contas import CODIGOS_SET
 from .rules import Detector
 
 BENFORD = np.log10(1 + 1 / np.arange(1, 10))
@@ -44,19 +44,24 @@ def benford_mad(valores) -> float:
 
 
 # ---------- detectores ----------
-def _so_plano(funcao):
-    """Executa o detector apenas nas linhas de contas válidas do plano.
-    Contas fora do plano são tratadas pela regra `conta_invalida` e distorceriam as estatísticas."""
-    def envolvida(df, **kwargs):
-        mascara = df["conta_cosif"].isin(CODIGOS)
-        resultado = funcao(df[mascara], **kwargs)
-        return resultado.reindex(df.index, fill_value=False).astype(bool)
-    envolvida.__name__ = funcao.__name__
-    envolvida.__doc__ = funcao.__doc__
-    return envolvida
+def _so_plano(min_linhas: int = 0):
+    """Executa o detector apenas em contas do elenco COSIF (e, se pedido, com um mínimo de lançamentos).
+    Contas fora do elenco são tratadas pelas regras `conta_invalida` e `conta_fora_vigencia`;
+    contas com pouquíssimos lançamentos não sustentam uma estatística própria."""
+    def decorador(funcao):
+        def envolvida(df, **kwargs):
+            mascara = df["conta_cosif"].isin(CODIGOS_SET)
+            if min_linhas:
+                mascara &= df["conta_cosif"].map(df["conta_cosif"].value_counts()) >= min_linhas
+            resultado = funcao(df[mascara], **kwargs)
+            return resultado.reindex(df.index, fill_value=False).astype(bool)
+        envolvida.__name__ = funcao.__name__
+        envolvida.__doc__ = funcao.__doc__
+        return envolvida
+    return decorador
 
 
-def valor_atipico_conta(df: pd.DataFrame, limiar: float = 4.0) -> pd.Series:
+def valor_atipico_conta(df: pd.DataFrame, limiar: float = 3.5) -> pd.Series:
     z = zscore_robusto(np.log(df["valor"].clip(lower=0.01)), df["conta_cosif"])
     return z > limiar
 
@@ -120,10 +125,10 @@ def pico_mensal(df: pd.DataFrame, limiar: float = 3.5, min_meses: int = 6) -> pd
     return pd.Series(chave.isin(marcados), index=df.index)
 
 
-valor_atipico_conta = _so_plano(valor_atipico_conta)
-par_usuario_conta_raro = _so_plano(par_usuario_conta_raro)
-desvio_digitos_usuario = _so_plano(desvio_digitos_usuario)
-pico_mensal = _so_plano(pico_mensal)
+valor_atipico_conta = _so_plano(30)(valor_atipico_conta)
+par_usuario_conta_raro = _so_plano()(par_usuario_conta_raro)
+desvio_digitos_usuario = _so_plano(30)(desvio_digitos_usuario)
+pico_mensal = _so_plano(30)(pico_mensal)
 
 ESTATISTICOS = [
     Detector("valor_atipico_conta", "Valor muito acima do padrão da conta (z-score robusto, escala log)", 5,

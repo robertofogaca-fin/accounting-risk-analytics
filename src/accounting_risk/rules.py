@@ -10,7 +10,7 @@ from typing import Callable
 import pandas as pd
 
 from .data_generator import LIMITE_MANUAL_ALTO
-from .plano_contas import CODIGOS
+from .plano_contas import CODIGOS_SET, VIGENCIA_FIM, VIGENCIA_INI
 
 
 @dataclass(frozen=True)
@@ -51,8 +51,15 @@ def historico_vazio(df: pd.DataFrame) -> pd.Series:
 
 
 def conta_invalida(df: pd.DataFrame) -> pd.Series:
-    """Conta que não existe no plano de contas COSIF da instituição (inclui DV errado)."""
-    return ~df["conta_cosif"].isin(CODIGOS)
+    """Conta que não existe no elenco COSIF (inclui DV errado)."""
+    return ~df["conta_cosif"].isin(CODIGOS_SET)
+
+
+def conta_fora_vigencia(df: pd.DataFrame) -> pd.Series:
+    """Conta existente no COSIF, mas usada antes do início ou depois do fim da sua vigência."""
+    inicio = pd.to_datetime(df["conta_cosif"].map(VIGENCIA_INI))
+    fim = pd.to_datetime(df["conta_cosif"].map(VIGENCIA_FIM))
+    return (df["data_lancamento"] < inicio) | (df["data_lancamento"] > fim)
 
 
 REGRAS = [
@@ -62,5 +69,6 @@ REGRAS = [
     Detector("manual_alto", "Lançamento manual acima do limite", 4, manual_alto, "manual_alto"),
     Detector("sem_segregacao", "Mesmo usuário cria e aprova", 5, sem_segregacao, "sem_segregacao"),
     Detector("historico_vazio", "Histórico ausente ou muito curto", 1, historico_vazio, "historico_vazio"),
-    Detector("conta_invalida", "Conta fora do plano COSIF (código inexistente ou DV errado)", 7, conta_invalida, "conta_invalida"),
+    Detector("conta_invalida", "Conta fora do elenco COSIF (código inexistente ou DV errado)", 7, conta_invalida, "conta_invalida"),
+    Detector("conta_fora_vigencia", "Conta COSIF usada fora do período de vigência", 6, conta_fora_vigencia, "conta_fora_vigencia"),
 ]

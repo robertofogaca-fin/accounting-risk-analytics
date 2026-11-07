@@ -3,7 +3,7 @@ import pandas as pd
 
 from accounting_risk import stats
 from accounting_risk.data_generator import TIPOS_CONHECIDOS, TIPOS_SUTIS, gerar_razao
-from accounting_risk.plano_contas import CODIGOS
+from accounting_risk.data_generator import CODIGOS
 from accounting_risk.scoring import aplicar_detectores, resumo_por_tipo
 
 

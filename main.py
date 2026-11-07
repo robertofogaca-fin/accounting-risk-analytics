@@ -1,4 +1,4 @@
-"""Pipeline v0.2: gera razão fictício (plano COSIF), aplica regras + estatística e salva relatórios."""
+"""Pipeline: gera razão fictício (plano COSIF), aplica regras + estatística e salva relatórios."""
 import sys
 from pathlib import Path
 
@@ -32,8 +32,8 @@ def main() -> None:
     print(f"Lançamentos sinalizados: {len(sinalizados)}")
     print("\nDistribuição por nível de risco:")
     print(pontuado["nivel_risco"].value_counts().to_string())
-    print("\nv0.1 (só regras):   ", avaliar(aplicar_regras(df)))
-    print("v0.2 (regras + estatística):", avaliar(pontuado))
+    print("\nSó regras:             ", avaliar(aplicar_regras(df)))
+    print("Regras + estatística:", avaliar(pontuado))
     print("\nTrade-off por limiar de score:")
     print(curva_por_limiar(pontuado).to_string(index=False))
     print("\nRecall por tipo de anomalia:")

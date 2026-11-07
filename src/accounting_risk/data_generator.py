@@ -1,22 +1,28 @@
-"""Gerador de razão contábil FICTÍCIO (plano de contas COSIF) com anomalias rotuladas.
+"""Gerador de razão contábil FICTÍCIO (plano de contas COSIF completo) com anomalias rotuladas.
 
 Dados normais: dias úteis, valores com centavos, valor típico por conta (lognormal),
 aprovador diferente do criador, cada usuário concentrado em 3 contas habituais.
 
 Anomalias CONHECIDAS (pegas por regras simples):
   fim_de_semana, valor_redondo, duplicidade, manual_alto, sem_segregacao,
-  historico_vazio, conta_invalida
+  historico_vazio, conta_invalida, conta_fora_vigencia
 Anomalias SUTIS (regras fixas não pegam; a estatística precisa pegar):
   valor_atipico_conta, par_usuario_conta_raro, fracionamento_alcada, pico_mensal
 """
 import numpy as np
 import pandas as pd
 
-from .plano_contas import CODIGOS, DESCRICAO, calcular_dv
+from .plano_contas import CODIGOS_SET, DESCRICAO, PLANO, calcular_dv, formatar_codigo, so_digitos
 
-# Mediana típica (R$) por conta, na ordem de CODIGOS, e dispersão (log) comum
-_MEDIANAS = [900, 1500, 600, 400, 1200, 300, 250, 800, 800]
-MEDIANA = dict(zip(CODIGOS, _MEDIANAS))
+# Contas operacionais usadas nos lançamentos normais: folhas do COSIF, natureza Normal e vigentes
+# em todo o período. Mediana típica (R$) por conta; dispersão (log) comum.
+_CONTAS_OPERACIONAIS = [
+    ("1111000008", 900), ("1129200003", 1500), ("1853010002", 1200), ("1521000007", 600),
+    ("4152000002", 1200), ("4992705000", 400), ("4942020003", 300), ("4941000000", 800),
+    ("7110530009", 300), ("7170115000", 250), ("3291010301", 800), ("9046020007", 800),
+]
+CODIGOS = [formatar_codigo(c) for c, _ in _CONTAS_OPERACIONAIS]
+MEDIANA = {formatar_codigo(c): m for c, m in _CONTAS_OPERACIONAIS}
 SIGMA = 0.9
 
 CENTROS_CUSTO = ["CC100", "CC200", "CC300", "CC400"]
@@ -28,13 +34,17 @@ INICIO, FIM = "2025-01-01", "2026-09-30"
 
 TIPOS_CONHECIDOS = [
     "fim_de_semana", "valor_redondo", "duplicidade", "manual_alto",
-    "sem_segregacao", "historico_vazio", "conta_invalida",
+    "sem_segregacao", "historico_vazio", "conta_invalida", "conta_fora_vigencia",
 ]
 TIPOS_SUTIS = ["valor_atipico_conta", "par_usuario_conta_raro", "fracionamento_alcada", "pico_mensal"]
 
 
 def _perfis_usuarios(rng):
-    return {u: list(rng.choice(CODIGOS, size=3, replace=False)) for u in USUARIOS}
+    """Cada usuário tem 3 contas habituais; a distribuição cíclica garante que toda conta
+    operacional tenha o mesmo número de usuários habituais (3)."""
+    ordem = list(rng.permutation(CODIGOS))
+    n = len(ordem)
+    return {u: [ordem[i % n], ordem[(i + 4) % n], ordem[(i + 8) % n]] for i, u in enumerate(USUARIOS)}
 
 
 def _aprovadores(rng, criadores):
@@ -133,20 +143,30 @@ def _injetar_anomalias(df, rng, k, habituais):
     idx = pegar(k)  # conta fora do plano (DV errado ou código inexistente)
     invalidas = []
     for i in range(k):
-        base = df.loc[idx[i], "conta_cosif"]
+        digitos = so_digitos(df.loc[idx[i], "conta_cosif"])
         if i % 2 == 0:  # mesmo código com dígito verificador trocado
-            digitos = base[0] + base[2] + base[4] + base[6:8] + base[9:11]
-            dv_errado = (calcular_dv(digitos) + 1 + i % 8) % 10
-            invalidas.append(base[:-1] + str(dv_errado))
-        else:  # código estruturalmente válido, mas fora do plano da instituição
+            dv_errado = (calcular_dv(digitos[:9]) + 1 + i % 8) % 10
+            invalidas.append(formatar_codigo(digitos[:9] + str(dv_errado)))
+        else:  # estrutura e DV válidos, mas código inexistente no elenco
             while True:
-                novo = "1" + str(rng.integers(1, 9)) + "0" + "0000"
-                codigo = f"{novo[0]}.{novo[1]}.{novo[2]}.{novo[3:5]}.{novo[5:7]}-{calcular_dv(novo)}"
-                if codigo not in CODIGOS:
+                base = str(rng.choice([1, 2, 3, 4, 6, 7, 8, 9])) + str(rng.integers(10**7, 10**8)).zfill(8)
+                codigo = formatar_codigo(base)
+                if codigo not in CODIGOS_SET:
                     break
             invalidas.append(codigo)
     df.loc[idx, "conta_cosif"] = invalidas
     _marcar(df, idx, "conta_invalida")
+
+    idx = pegar(k)  # conta existente, mas fora da vigência na data do lançamento
+    folhas = PLANO[PLANO["folha"]]
+    novas_contas = []
+    for i in idx:
+        d = df.loc[i, "data_lancamento"]
+        fora = folhas[(d < folhas["vigencia_ini"]) | (folhas["vigencia_fim"].notna() & (d > folhas["vigencia_fim"]))]
+        novas_contas.append(fora["codigo"].iloc[int(rng.integers(len(fora)))])
+    df.loc[idx, "conta_cosif"] = novas_contas
+    df.loc[idx, "descricao_conta"] = [DESCRICAO[c] for c in novas_contas]
+    _marcar(df, idx, "conta_fora_vigencia")
 
     # ---------- anomalias sutis (alteram linhas existentes) ----------
     baixas = df.index[df["conta_cosif"].map(MEDIANA).le(600).fillna(False)]
@@ -200,7 +220,7 @@ def _injetar_anomalias(df, rng, k, habituais):
 
 
 def gerar_razao(n: int = 20_000, n_por_tipo: int = 100, seed: int = 42) -> pd.DataFrame:
-    """Gera `n` lançamentos normais + `n_por_tipo` anomalias de cada um dos 11 tipos."""
+    """Gera `n` lançamentos normais + `n_por_tipo` anomalias de cada um dos 12 tipos."""
     rng = np.random.default_rng(seed)
     habituais = _perfis_usuarios(rng)
     df = _lancamentos_normais(n, rng, habituais)

@@ -2,14 +2,15 @@ import pandas as pd
 
 from accounting_risk import rules
 from accounting_risk.data_generator import TIPOS_CONHECIDOS, TIPOS_SUTIS, gerar_razao
-from accounting_risk.plano_contas import CODIGOS
+from accounting_risk.data_generator import CODIGOS as OPERACIONAIS
+from accounting_risk.plano_contas import CODIGOS_SET, PLANO, formatar_codigo
 from accounting_risk.scoring import aplicar_regras, resumo_por_tipo
 
 
 def _base(**kwargs):
     linha = {
         "data_lancamento": pd.Timestamp("2026-03-10"),  # terça-feira
-        "conta_cosif": CODIGOS[0],
+        "conta_cosif": OPERACIONAIS[0],
         "valor": 1234.56,
         "tipo": "D",
         "centro_custo": "CC100",
@@ -56,9 +57,20 @@ def test_historico_vazio():
 
 
 def test_conta_invalida():
-    assert rules.conta_invalida(_base(conta_cosif="1.1.1.00.00-3")).iloc[0]  # DV errado
-    assert rules.conta_invalida(_base(conta_cosif="1.7.0.00.00-0")).iloc[0]  # fora do plano
+    fora_do_elenco = formatar_codigo("199999999")  # estrutura e DV válidos, mas inexistente
+    assert fora_do_elenco not in CODIGOS_SET
+    assert rules.conta_invalida(_base(conta_cosif=fora_do_elenco)).iloc[0]
+    assert rules.conta_invalida(_base(conta_cosif="1.1.1.10.00.00-3")).iloc[0]  # DV errado
     assert not rules.conta_invalida(_base()).iloc[0]
+
+
+def test_conta_fora_vigencia():
+    encerrada = PLANO.dropna(subset=["vigencia_fim"]).iloc[0]
+    futura = PLANO[PLANO["vigencia_ini"] >= "2027-01-01"].iloc[0]
+    data = pd.Timestamp("2027-06-15") if encerrada["vigencia_fim"] < pd.Timestamp("2027-01-01") else pd.Timestamp("2026-03-10")
+    assert rules.conta_fora_vigencia(_base(conta_cosif=encerrada["codigo"], data_lancamento=data)).iloc[0]
+    assert rules.conta_fora_vigencia(_base(conta_cosif=futura["codigo"])).iloc[0]  # usada em 2026, vigente só em 2027
+    assert not rules.conta_fora_vigencia(_base()).iloc[0]
 
 
 def test_lancamento_limpo_tem_score_zero():

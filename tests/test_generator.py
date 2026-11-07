@@ -1,5 +1,6 @@
 from accounting_risk.data_generator import TIPOS_CONHECIDOS, TIPOS_SUTIS, gerar_razao
-from accounting_risk.plano_contas import CODIGOS
+from accounting_risk.plano_contas import CODIGOS_SET
+from accounting_risk.rules import conta_fora_vigencia
 
 
 def test_gerador_e_reprodutivel():
@@ -19,6 +20,9 @@ def test_gerador_injeta_todos_os_tipos_rotulados():
 def test_contas_normais_seguem_o_plano_cosif():
     df = gerar_razao(n=2000, n_por_tipo=10, seed=7)
     normais = df[df["flag_anomalia"] == 0]
-    assert normais["conta_cosif"].isin(CODIGOS).all()
+    assert normais["conta_cosif"].isin(CODIGOS_SET).all()
+    assert not conta_fora_vigencia(normais).any()
     invalidas = df[df["tipo_anomalia"] == "conta_invalida"]
-    assert (~invalidas["conta_cosif"].isin(CODIGOS)).all()
+    assert (~invalidas["conta_cosif"].isin(CODIGOS_SET)).all()
+    fora = df[df["tipo_anomalia"] == "conta_fora_vigencia"]
+    assert fora["conta_cosif"].isin(CODIGOS_SET).all() and conta_fora_vigencia(fora).all()
