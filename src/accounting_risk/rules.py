@@ -9,6 +9,7 @@ from typing import Callable
 
 import pandas as pd
 
+from .calendario import dia_nao_util as _dia_nao_util
 from .data_generator import LIMITE_MANUAL_ALTO
 from .plano_contas import CODIGOS_SET, VIGENCIA_FIM, VIGENCIA_INI
 
@@ -25,8 +26,9 @@ class Detector:
 Regra = Detector  # compatibilidade com a v0.1
 
 
-def fim_de_semana(df: pd.DataFrame) -> pd.Series:
-    return df["data_lancamento"].dt.day_of_week >= 5
+def dia_nao_util(df: pd.DataFrame) -> pd.Series:
+    """Fim de semana, feriado ou ponto facultativo bancário."""
+    return _dia_nao_util(df["data_lancamento"])
 
 
 def valor_redondo(df: pd.DataFrame, minimo: float = 1_000.0) -> pd.Series:
@@ -63,7 +65,7 @@ def conta_fora_vigencia(df: pd.DataFrame) -> pd.Series:
 
 
 REGRAS = [
-    Detector("fim_de_semana", "Lançamento em sábado ou domingo", 1, fim_de_semana, "fim_de_semana"),
+    Detector("dia_nao_util", "Lançamento em fim de semana ou feriado bancário", 1, dia_nao_util, "dia_nao_util"),
     Detector("valor_redondo", "Valor redondo (múltiplo de 1.000)", 2, valor_redondo, "valor_redondo"),
     Detector("duplicidade", "Mesma data, conta, valor, tipo e centro de custo", 3, duplicidade, "duplicidade"),
     Detector("manual_alto", "Lançamento manual acima do limite", 4, manual_alto, "manual_alto"),

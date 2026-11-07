@@ -8,7 +8,7 @@ Detecção de lançamentos contábeis anormais, evoluindo de **regras simples** 
 - [x] **v0.1** Gerador de razão fictício + regras determinísticas + score de risco
 - [x] **v0.2** Detectores estatísticos: z-score robusto, perfil de dígitos por usuário (tipo Benford),
       par usuário-conta raro, pico mensal
-- [x] **v0.3** Plano COSIF completo (4.401 contas, 9 dígitos + DV): validação de DV e de vigência
+- [x] **v0.3** Plano COSIF completo (4.401 contas, 9 dígitos + DV): validação de DV e de vigência; calendário de feriados bancários
 - [ ] **v0.4** Machine learning (Isolation Forest / LOF) e comparação regras × estatística × ML
 - [ ] **v0.5** Dashboard Streamlit
 
@@ -30,11 +30,21 @@ O elenco está em `src/accounting_risk/dados/plano_contas_cosif.csv`: código, n
 > Premissa: o fim de vigência é inclusivo (a conta vale até o fim do mês informado).
 > O lançamento do razão é de uma única perna (sem partida dobrada).
 
+## Calendário bancário
+
+`src/accounting_risk/calendario.py` traz os feriados e dias sem expediente de 2025 a 2027. Fim de semana,
+feriado nacional e ponto facultativo sem expediente bancário (Carnaval, Corpus Christi) contam como dia não útil.
+Quarta-Feira de Cinzas e o último dia útil do ano têm expediente parcial e **não** são marcados, já que o
+fechamento contábil acontece normalmente nesses dias.
+
+2026 e 2027 vêm de uma lista informada pelo autor; 2025 foi derivado da data da Páscoa. Os feriados móveis
+são conferidos em teste contra a data da Páscoa. Não há feriados estaduais ou municipais.
+
 ## Detectores
 
 | Detector | Tipo | O que detecta | Peso |
 |---|---|---|---|
-| fim_de_semana | regra | Lançamento em sábado/domingo | 1 |
+| dia_nao_util | regra | Lançamento em fim de semana ou feriado/ponto facultativo bancário | 1 |
 | valor_redondo | regra | Valor múltiplo de 1.000 | 2 |
 | duplicidade | regra | Mesma data, conta, valor, tipo e centro de custo | 3 |
 | manual_alto | regra | Lançamento manual acima do limite | 4 |
@@ -58,7 +68,7 @@ pico mensal), em contas com pelo menos 30 lançamentos.
 
 ## Anomalias injetadas (12 tipos, rotuladas)
 
-- **Conhecidas** (as regras pegam): fim de semana, valor redondo, duplicidade, manual alto, sem segregação,
+- **Conhecidas** (as regras pegam): dia não útil (fim de semana e feriado), valor redondo, duplicidade, manual alto, sem segregação,
   histórico vazio, conta inválida, conta fora de vigência
 - **Sutis** (regras fixas não pegam): valor atípico para a conta, par usuário-conta raro, fracionamento abaixo
   da alçada, pico mensal
@@ -70,12 +80,12 @@ Os lançamentos normais usam 12 contas folha do COSIF, de natureza Normal e vige
 | | Recall | Precision |
 |---|---|---|
 | Só regras | 66,7% | 88,9% |
-| Regras + estatística | 100% | 69,3% |
+| Regras + estatística | 100% | 63,0% |
 
 Trade-off pelo rigor do alerta: score ≥ 60 gera 301 alertas com 100% de precision e 25,1% de recall;
-qualquer sinal gera 1.732 alertas com 100% de recall. O score serve para priorizar a fila de revisão.
+qualquer sinal gera 1.905 alertas com 100% de recall. O score serve para priorizar a fila de revisão.
 
-Em 10 sementes diferentes, o recall ficou em 100% e a precision de regras + estatística variou de 56,8% a 81,2%.
+Em 10 sementes diferentes, o recall ficou em 100% e a precision de regras + estatística variou de 54,0% a 81,4%.
 
 ## Como rodar
 
@@ -93,6 +103,6 @@ Saídas em `output/`: lançamentos sinalizados, resumo por tipo e resumo por det
 
 - O recall de 100% vem de anomalias injetadas com sinal forte. Em dados reais não há rótulo e a calibração dos limiares precisa de revisão manual.
 - Os limiares (z > 3,5, MAD de dígitos, pico) foram calibrados nestes dados sintéticos.
-- Feriados ainda não entram na regra de fim de semana.
+- O calendário cobre só feriados nacionais bancários (sem estaduais e municipais).
 - Os falsos positivos vêm sobretudo dos detectores de triagem (dígitos, pico mensal), por isso pesam pouco no score.
 - O plano interno da instituição costuma ter contas próprias mapeadas ao COSIF; aqui o razão usa direto os códigos COSIF.

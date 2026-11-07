@@ -25,9 +25,13 @@ def _base(**kwargs):
     return pd.DataFrame([linha])
 
 
-def test_fim_de_semana():
-    assert rules.fim_de_semana(_base(data_lancamento=pd.Timestamp("2026-03-14"))).iloc[0]
-    assert not rules.fim_de_semana(_base()).iloc[0]
+def test_dia_nao_util():
+    assert rules.dia_nao_util(_base(data_lancamento=pd.Timestamp("2026-03-14"))).iloc[0]  # sábado
+    assert rules.dia_nao_util(_base(data_lancamento=pd.Timestamp("2026-04-21"))).iloc[0]  # Tiradentes
+    assert rules.dia_nao_util(_base(data_lancamento=pd.Timestamp("2026-02-17"))).iloc[0]  # Carnaval
+    assert not rules.dia_nao_util(_base(data_lancamento=pd.Timestamp("2026-02-18"))).iloc[0]  # Cinzas: expediente parcial
+    assert not rules.dia_nao_util(_base(data_lancamento=pd.Timestamp("2025-12-31"))).iloc[0]  # fechamento do ano
+    assert not rules.dia_nao_util(_base()).iloc[0]
 
 
 def test_valor_redondo():

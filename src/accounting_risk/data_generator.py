@@ -4,7 +4,7 @@ Dados normais: dias úteis, valores com centavos, valor típico por conta (logno
 aprovador diferente do criador, cada usuário concentrado em 3 contas habituais.
 
 Anomalias CONHECIDAS (pegas por regras simples):
-  fim_de_semana, valor_redondo, duplicidade, manual_alto, sem_segregacao,
+  dia_nao_util, valor_redondo, duplicidade, manual_alto, sem_segregacao,
   historico_vazio, conta_invalida, conta_fora_vigencia
 Anomalias SUTIS (regras fixas não pegam; a estatística precisa pegar):
   valor_atipico_conta, par_usuario_conta_raro, fracionamento_alcada, pico_mensal
@@ -12,6 +12,7 @@ Anomalias SUTIS (regras fixas não pegam; a estatística precisa pegar):
 import numpy as np
 import pandas as pd
 
+from .calendario import NAO_UTEIS
 from .plano_contas import CODIGOS_SET, DESCRICAO, PLANO, calcular_dv, formatar_codigo, so_digitos
 
 # Contas operacionais usadas nos lançamentos normais: folhas do COSIF, natureza Normal e vigentes
@@ -33,7 +34,7 @@ ALCADA = 10_000.0
 INICIO, FIM = "2025-01-01", "2026-09-30"
 
 TIPOS_CONHECIDOS = [
-    "fim_de_semana", "valor_redondo", "duplicidade", "manual_alto",
+    "dia_nao_util", "valor_redondo", "duplicidade", "manual_alto",
     "sem_segregacao", "historico_vazio", "conta_invalida", "conta_fora_vigencia",
 ]
 TIPOS_SUTIS = ["valor_atipico_conta", "par_usuario_conta_raro", "fracionamento_alcada", "pico_mensal"]
@@ -52,7 +53,7 @@ def _aprovadores(rng, criadores):
 
 
 def _lancamentos_normais(n, rng, habituais):
-    datas = pd.bdate_range(INICIO, FIM)
+    datas = pd.bdate_range(INICIO, FIM, freq="C", holidays=NAO_UTEIS)
     usuarios = rng.choice(USUARIOS, size=n)
     contas = np.empty(n, dtype=object)
     for u in USUARIOS:
@@ -118,10 +119,15 @@ def _injetar_anomalias(df, rng, k, habituais):
         return escolhidos
 
     # ---------- anomalias conhecidas ----------
-    idx = pegar(k)  # fim de semana
-    sabados = pd.date_range("2025-01-04", "2026-09-26", freq="W-SAT")
-    df.loc[idx, "data_lancamento"] = rng.choice(sabados, size=k)
-    _marcar(df, idx, "fim_de_semana")
+    idx = pegar(k)  # dia não útil: metade em fim de semana, metade em feriado/facultativo de dia de semana
+    todos = pd.date_range(INICIO, FIM)
+    fins_de_semana = todos[todos.day_of_week >= 5]
+    feriados = pd.DatetimeIndex([d for d in NAO_UTEIS if INICIO <= str(d.date()) <= FIM and d.day_of_week < 5])
+    metade = k // 2
+    df.loc[idx, "data_lancamento"] = np.concatenate(
+        [rng.choice(fins_de_semana, size=metade), rng.choice(feriados, size=k - metade)]
+    )
+    _marcar(df, idx, "dia_nao_util")
 
     idx = pegar(k)  # valor redondo
     df.loc[idx, "valor"] = rng.choice([2000.0, 3000.0, 4000.0, 5000.0], size=k)
@@ -179,7 +185,7 @@ def _injetar_anomalias(df, rng, k, habituais):
 
     # ---------- anomalias sutis (linhas novas) ----------
     novas = []
-    datas_bd = pd.bdate_range(INICIO, FIM)
+    datas_bd = pd.bdate_range(INICIO, FIM, freq="C", holidays=NAO_UTEIS)
 
     # par usuário-conta raro: usuário lança em conta fora do seu perfil
     usu = rng.choice(USUARIOS, size=k)
@@ -200,7 +206,7 @@ def _injetar_anomalias(df, rng, k, habituais):
     # pico mensal: rajada de lançamentos moderados em uma conta de baixo volume/mês
     conta = rng.choice([c for c in CODIGOS if MEDIANA[c] <= 400])
     mes = rng.choice(pd.period_range("2025-04", "2026-06", freq="M"))
-    dias = pd.bdate_range(mes.start_time, mes.end_time)
+    dias = pd.bdate_range(mes.start_time, mes.end_time, freq="C", holidays=NAO_UTEIS)
     donos = [x for x in USUARIOS if conta in habituais[x]] or USUARIOS
     novas.append(
         _novas_linhas(rng, k, [conta] * k, rng.choice(donos, size=k), rng.choice(dias, size=k),
