@@ -9,9 +9,32 @@ TODOS = REGRAS + ESTATISTICOS
 PONTOS_PARA_100 = 10  # soma de pesos que leva o score a 100
 
 
-def aplicar_detectores(df: pd.DataFrame, detectores: list[Detector] = TODOS) -> pd.DataFrame:
-    """Colunas novas: sinal_<nome>, score, nivel_risco, regras_disparadas."""
+def aplicar_detectores(df: pd.DataFrame, detectores: list[Detector] = TODOS, desligar=(), plano_proprio: bool = False) -> pd.DataFrame:
+    """Colunas novas: sinal_<nome>, score, nivel_risco, regras_disparadas.
+
+    Detectores cujas colunas necessárias não existem, ou listados em `desligar`, ficam de fora.
+    `plano_proprio=True` indica que a base usa contas que não estão no elenco COSIF do projeto: desliga
+    `conta_invalida` e `conta_fora_vigencia` e deixa os detectores estatísticos rodarem em todas as contas.
+    A lista dos que rodaram está em `resultado.attrs["detectores_ativos"]` e dos que ficaram de fora
+    (com o motivo) em `resultado.attrs["detectores_desligados"]`.
+    """
+    if plano_proprio:
+        # contas fora do elenco COSIF do projeto: as regras de plano/vigência marcariam tudo
+        desligar = set(desligar) | {"conta_invalida", "conta_fora_vigencia"}
+    ativos, desligados = [], {}
+    for d in detectores:
+        faltam = [c for c in d.requer if c not in df.columns]
+        if d.nome in set(desligar):
+            desligados[d.nome] = "desligado pelo usuário"
+        elif faltam:
+            desligados[d.nome] = "faltam colunas: " + ", ".join(faltam)
+        else:
+            ativos.append(d)
+    detectores = ativos
     out = df.copy()
+    out.attrs["plano_proprio"] = plano_proprio
+    out.attrs["detectores_ativos"] = [d.nome for d in ativos]
+    out.attrs["detectores_desligados"] = desligados
     for d in detectores:
         out[f"sinal_{d.nome}"] = d.funcao(out).astype(bool)
 
@@ -53,17 +76,21 @@ def resumo_por_tipo(df_pontuado: pd.DataFrame, limiar: float = 1.0) -> pd.DataFr
     )
 
 
-def resumo_por_detector(df_pontuado: pd.DataFrame, detectores: list[Detector] = TODOS) -> pd.DataFrame:
-    """Por detector: sinalizados, precision (qualquer anomalia) e recall no tipo-alvo."""
+def resumo_por_detector(df_pontuado: pd.DataFrame, detectores: list[Detector] = TODOS, alvos: dict | None = None) -> pd.DataFrame:
+    """Por detector: sinalizados, precision (qualquer anomalia) e recall no tipo-alvo.
+    `alvos` (opcional) substitui o tipo-alvo de cada detector, útil para bases externas com outros rótulos."""
     linhas = []
     for d in detectores:
+        if f"sinal_{d.nome}" not in df_pontuado.columns:
+            continue
+        tipo_alvo = (alvos or {}).get(d.nome, d.tipo_alvo)
         sinal = df_pontuado[f"sinal_{d.nome}"]
         real = df_pontuado["flag_anomalia"] == 1
-        alvo = df_pontuado["tipo_anomalia"] == d.tipo_alvo
+        alvo = df_pontuado["tipo_anomalia"] == tipo_alvo
         linhas.append(
             {
                 "detector": d.nome,
-                "tipo_alvo": d.tipo_alvo,
+                "tipo_alvo": tipo_alvo,
                 "sinalizados": int(sinal.sum()),
                 "precision": round(float((sinal & real).sum() / max(sinal.sum(), 1)), 3),
                 "recall_alvo": round(float((sinal & alvo).sum() / max(alvo.sum(), 1)), 3),

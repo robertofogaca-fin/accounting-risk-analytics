@@ -21,6 +21,7 @@ class Detector:
     peso: int
     funcao: Callable[[pd.DataFrame], pd.Series]
     tipo_alvo: str = ""  # tipo de anomalia que o detector pretende pegar (para avaliação)
+    requer: tuple = ()  # colunas necessárias; se faltar alguma, o detector é desligado
 
 
 Regra = Detector  # compatibilidade com a v0.1
@@ -36,7 +37,8 @@ def valor_redondo(df: pd.DataFrame, minimo: float = 1_000.0) -> pd.Series:
 
 
 def duplicidade(df: pd.DataFrame) -> pd.Series:
-    chave = ["data_lancamento", "conta_cosif", "valor", "tipo", "centro_custo"]
+    """Mesma data, conta, valor, tipo e centro de custo (usa as colunas que existirem)."""
+    chave = [c for c in ["data_lancamento", "conta_cosif", "valor", "tipo", "centro_custo"] if c in df.columns]
     return df.duplicated(subset=chave, keep=False)
 
 
@@ -65,12 +67,12 @@ def conta_fora_vigencia(df: pd.DataFrame) -> pd.Series:
 
 
 REGRAS = [
-    Detector("dia_nao_util", "Lançamento em fim de semana ou feriado bancário", 1, dia_nao_util, "dia_nao_util"),
-    Detector("valor_redondo", "Valor redondo (múltiplo de 1.000)", 2, valor_redondo, "valor_redondo"),
-    Detector("duplicidade", "Mesma data, conta, valor, tipo e centro de custo", 3, duplicidade, "duplicidade"),
-    Detector("manual_alto", "Lançamento manual acima do limite", 4, manual_alto, "manual_alto"),
-    Detector("sem_segregacao", "Mesmo usuário cria e aprova", 5, sem_segregacao, "sem_segregacao"),
-    Detector("historico_vazio", "Histórico ausente ou muito curto", 1, historico_vazio, "historico_vazio"),
-    Detector("conta_invalida", "Conta fora do elenco COSIF (código inexistente ou DV errado)", 7, conta_invalida, "conta_invalida"),
-    Detector("conta_fora_vigencia", "Conta COSIF usada fora do período de vigência", 6, conta_fora_vigencia, "conta_fora_vigencia"),
+    Detector("dia_nao_util", "Lançamento em fim de semana ou feriado bancário", 1, dia_nao_util, "dia_nao_util", ("data_lancamento",)),
+    Detector("valor_redondo", "Valor redondo (múltiplo de 1.000)", 2, valor_redondo, "valor_redondo", ("valor",)),
+    Detector("duplicidade", "Mesma data, conta, valor, tipo e centro de custo", 3, duplicidade, "duplicidade", ("data_lancamento", "conta_cosif", "valor")),
+    Detector("manual_alto", "Lançamento manual acima do limite", 4, manual_alto, "manual_alto", ("origem", "valor")),
+    Detector("sem_segregacao", "Mesmo usuário cria e aprova", 5, sem_segregacao, "sem_segregacao", ("usuario_criacao", "usuario_aprovacao")),
+    Detector("historico_vazio", "Histórico ausente ou muito curto", 1, historico_vazio, "historico_vazio", ("historico",)),
+    Detector("conta_invalida", "Conta fora do elenco COSIF (código inexistente ou DV errado)", 7, conta_invalida, "conta_invalida", ("conta_cosif",)),
+    Detector("conta_fora_vigencia", "Conta COSIF usada fora do período de vigência", 6, conta_fora_vigencia, "conta_fora_vigencia", ("conta_cosif", "data_lancamento")),
 ]

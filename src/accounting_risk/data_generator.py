@@ -8,6 +8,8 @@ Anomalias CONHECIDAS (pegas por regras simples):
   historico_vazio, conta_invalida, conta_fora_vigencia
 Anomalias SUTIS (regras fixas não pegam; a estatística precisa pegar):
   valor_atipico_conta, par_usuario_conta_raro, fracionamento_alcada, pico_mensal
+Anomalia DESCONHECIDA (opcional, `desconhecidas=True`): centro_custo_incomum, uso de um centro de
+  custo que a conta quase nunca usa. Nenhum detector de regra/estatística foi escrito para ela.
 """
 import numpy as np
 import pandas as pd
@@ -38,6 +40,8 @@ TIPOS_CONHECIDOS = [
     "sem_segregacao", "historico_vazio", "conta_invalida", "conta_fora_vigencia",
 ]
 TIPOS_SUTIS = ["valor_atipico_conta", "par_usuario_conta_raro", "fracionamento_alcada", "pico_mensal"]
+# Anomalia que nenhuma regra nem detector estatístico do projeto conhece (opcional, ver `desconhecidas`)
+TIPOS_DESCONHECIDOS = ["centro_custo_incomum"]
 
 
 def _perfis_usuarios(rng):
@@ -48,11 +52,16 @@ def _perfis_usuarios(rng):
     return {u: [ordem[i % n], ordem[(i + 4) % n], ordem[(i + 8) % n]] for i, u in enumerate(USUARIOS)}
 
 
+def _centros_habituais(rng):
+    """Cada conta usa 2 dos 4 centros de custo no dia a dia (só no modo `desconhecidas`)."""
+    return {c: list(rng.choice(CENTROS_CUSTO, size=2, replace=False)) for c in CODIGOS}
+
+
 def _aprovadores(rng, criadores):
     return np.array([rng.choice([u for u in USUARIOS if u != c]) for c in criadores])
 
 
-def _lancamentos_normais(n, rng, habituais):
+def _lancamentos_normais(n, rng, habituais, centros_hab=None):
     datas = pd.bdate_range(INICIO, FIM, freq="C", holidays=NAO_UTEIS)
     usuarios = rng.choice(USUARIOS, size=n)
     contas = np.empty(n, dtype=object)
@@ -69,7 +78,12 @@ def _lancamentos_normais(n, rng, habituais):
             "data_lancamento": rng.choice(datas, size=n),
             "conta_cosif": contas,
             "descricao_conta": [DESCRICAO[c] for c in contas],
-            "centro_custo": rng.choice(CENTROS_CUSTO, size=n),
+            # a ordem dos sorteios é mantida para o modo padrão reproduzir exatamente as versões anteriores
+            "centro_custo": (
+                rng.choice(CENTROS_CUSTO, size=n)
+                if centros_hab is None
+                else [rng.choice(centros_hab[c]) if rng.random() > 0.005 else rng.choice(CENTROS_CUSTO) for c in contas]
+            ),
             "valor": valores,
             "tipo": rng.choice(["D", "C"], size=n),
             "usuario_criacao": usuarios,
@@ -82,14 +96,18 @@ def _lancamentos_normais(n, rng, habituais):
     )
 
 
-def _novas_linhas(rng, n, contas, usuarios, datas, valores, tipo):
+def _novas_linhas(rng, n, contas, usuarios, datas, valores, tipo, centros_hab=None):
     usuarios = np.asarray(usuarios)
+    if centros_hab is None:
+        centros = rng.choice(CENTROS_CUSTO, size=n)
+    else:
+        centros = np.array([rng.choice(centros_hab[c]) for c in contas])
     return pd.DataFrame(
         {
             "data_lancamento": datas,
             "conta_cosif": list(contas),
             "descricao_conta": [DESCRICAO[c] for c in contas],
-            "centro_custo": rng.choice(CENTROS_CUSTO, size=n),
+            "centro_custo": centros,
             "valor": np.round(valores, 2),
             "tipo": rng.choice(["D", "C"], size=n),
             "usuario_criacao": usuarios,
@@ -107,7 +125,7 @@ def _marcar(df, idx, tipo):
     df.loc[idx, "tipo_anomalia"] = tipo
 
 
-def _injetar_anomalias(df, rng, k, habituais):
+def _injetar_anomalias(df, rng, k, habituais, centros_hab=None):
     df = df.copy()
     df["documento"] = [f"DOC{i:07d}" for i in range(len(df))]
     livres = set(df.index)
@@ -183,6 +201,16 @@ def _injetar_anomalias(df, rng, k, habituais):
     df.loc[idx, "valor"] = np.round(med * np.exp(SIGMA * z), 2)
     _marcar(df, idx, "valor_atipico_conta")
 
+    # ---------- anomalia desconhecida (opcional) ----------
+    if centros_hab is not None:
+        idx = pegar(k)
+        novos = []
+        for i in idx:
+            raros = [c for c in CENTROS_CUSTO if c not in centros_hab[df.loc[i, "conta_cosif"]]]
+            novos.append(rng.choice(raros) if df.loc[i, "conta_cosif"] in centros_hab else df.loc[i, "centro_custo"])
+        df.loc[idx, "centro_custo"] = novos
+        _marcar(df, idx, "centro_custo_incomum")
+
     # ---------- anomalias sutis (linhas novas) ----------
     novas = []
     datas_bd = pd.bdate_range(INICIO, FIM, freq="C", holidays=NAO_UTEIS)
@@ -191,7 +219,7 @@ def _injetar_anomalias(df, rng, k, habituais):
     usu = rng.choice(USUARIOS, size=k)
     contas = [rng.choice([c for c in CODIGOS if c not in habituais[u]]) for u in usu]
     val = [MEDIANA[c] * np.exp(SIGMA * rng.standard_normal()) for c in contas]
-    novas.append(_novas_linhas(rng, k, contas, usu, rng.choice(datas_bd, size=k), np.clip(val, 20, 40_000), "par_usuario_conta_raro"))
+    novas.append(_novas_linhas(rng, k, contas, usu, rng.choice(datas_bd, size=k), np.clip(val, 20, 40_000), "par_usuario_conta_raro", centros_hab))
 
     # fracionamento abaixo da alçada: muitos lançamentos de 9.5xx a 9.9xx de um mesmo usuário
     grandes = [c for c in CODIGOS if MEDIANA[c] >= 800]
@@ -200,7 +228,7 @@ def _injetar_anomalias(df, rng, k, habituais):
     conta = rng.choice([c for c in habituais[u] if c in grandes])
     novas.append(
         _novas_linhas(rng, k, [conta] * k, [u] * k, rng.choice(datas_bd, size=k),
-                      rng.uniform(0.95 * ALCADA, ALCADA - 0.01, size=k), "fracionamento_alcada")
+                      rng.uniform(0.95 * ALCADA, ALCADA - 0.01, size=k), "fracionamento_alcada", centros_hab)
     )
 
     # pico mensal: rajada de lançamentos moderados em uma conta de baixo volume/mês
@@ -210,7 +238,7 @@ def _injetar_anomalias(df, rng, k, habituais):
     donos = [x for x in USUARIOS if conta in habituais[x]] or USUARIOS
     novas.append(
         _novas_linhas(rng, k, [conta] * k, rng.choice(donos, size=k), rng.choice(dias, size=k),
-                      MEDIANA[conta] * rng.uniform(3.0, 6.0, size=k), "pico_mensal")
+                      MEDIANA[conta] * rng.uniform(3.0, 6.0, size=k), "pico_mensal", centros_hab)
     )
 
     novas = pd.concat(novas, ignore_index=True)
@@ -225,12 +253,18 @@ def _injetar_anomalias(df, rng, k, habituais):
     return pd.concat([df, copias], ignore_index=True)
 
 
-def gerar_razao(n: int = 20_000, n_por_tipo: int = 100, seed: int = 42) -> pd.DataFrame:
-    """Gera `n` lançamentos normais + `n_por_tipo` anomalias de cada um dos 12 tipos."""
+def gerar_razao(n: int = 20_000, n_por_tipo: int = 100, seed: int = 42, desconhecidas: bool = False) -> pd.DataFrame:
+    """Gera `n` lançamentos normais + `n_por_tipo` anomalias de cada um dos 12 tipos.
+
+    Com `desconhecidas=True`, cada conta passa a ter 2 centros de custo habituais e entra um 13º tipo
+    (centro_custo_incomum) que nenhuma regra ou detector estatístico conhece. Com False (padrão), o
+    resultado é idêntico ao das versões anteriores.
+    """
     rng = np.random.default_rng(seed)
     habituais = _perfis_usuarios(rng)
-    df = _lancamentos_normais(n, rng, habituais)
-    df = _injetar_anomalias(df, rng, n_por_tipo, habituais)
+    centros_hab = _centros_habituais(rng) if desconhecidas else None
+    df = _lancamentos_normais(n, rng, habituais, centros_hab)
+    df = _injetar_anomalias(df, rng, n_por_tipo, habituais, centros_hab)
     df["data_lancamento"] = pd.to_datetime(df["data_lancamento"])
     df = df.sort_values("data_lancamento", kind="stable").reset_index(drop=True)
     df.insert(0, "id_lancamento", [f"LC{i + 1:06d}" for i in range(len(df))])

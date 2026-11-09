@@ -9,8 +9,9 @@ Detecção de lançamentos contábeis anormais, evoluindo de **regras simples** 
 - [x] **v0.2** Detectores estatísticos: z-score robusto, perfil de dígitos por usuário (tipo Benford),
       par usuário-conta raro, pico mensal
 - [x] **v0.3** Plano COSIF completo (4.401 contas, 9 dígitos + DV): validação de DV e de vigência; calendário de feriados bancários
-- [ ] **v0.4** Machine learning (Isolation Forest / LOF) e comparação regras × estatística × ML
-- [ ] **v0.5** Dashboard Streamlit
+- [x] **v0.4** Machine learning (Isolation Forest e LOF) e comparação regras × estatística × ML
+- [x] **v0.5** Validação externa: carregador de bases, desligamento automático de detectores e detectores genéricos de raridade
+- [ ] **v0.6** Dashboard Streamlit
 
 ## Plano de contas COSIF
 
@@ -87,6 +88,98 @@ qualquer sinal gera 1.905 alertas com 100% de recall. O score serve para prioriz
 
 Em 10 sementes diferentes, o recall ficou em 100% e a precision de regras + estatística variou de 54,0% a 81,4%.
 
+## Machine learning (v0.4)
+
+Isolation Forest e LOF (scikit-learn), **não supervisionados**: o modelo nunca vê o rótulo. O que ele consegue
+enxergar depende dos atributos (features) que recebe:
+
+- **Brutos:** valor (log), dia da semana, dia do mês, origem, débito/crédito, tamanho do histórico.
+- **Engenheirados:** os brutos + contexto que um analista escolheria olhar: z-score do valor na conta,
+  frequência da conta, raridade do par usuário-conta e conta-centro de custo, volume mensal da conta,
+  documento repetido, dia não útil, mesmo usuário criando e aprovando.
+
+Como medir sem um limiar fixo: cada método gera um **ranking de risco** e é avaliado por precision@k
+(k = número de anomalias reais), AUC e precisão média (AP).
+
+### Resultado no cenário padrão (12 tipos, seed 42)
+
+| Método | Precision@1200 | AUC | AP |
+|---|---|---|---|
+| Regras + estatística (score) | 77,1% | 0,991 | 0,841 |
+| Isolation Forest, atributos brutos | 25,8% | 0,678 | 0,255 |
+| Isolation Forest, atributos engenheirados | 66,2% | 0,980 | 0,741 |
+| LOF, atributos engenheirados | 38,0% | 0,609 | 0,312 |
+| Regras + estatística + Isolation Forest | 82,0% | 0,994 | 0,900 |
+
+- O ML sem engenharia de atributos pouco acrescenta (AUC 0,678).
+- Com bons atributos, o Isolation Forest chega perto das regras, mas não as supera nos tipos conhecidos e perde a explicação do alerta.
+- Combinar os dois melhora o AP (0,841 para 0,900). Em 7 sementes, o AP combinado ficou entre 0,886 e 0,912.
+- O LOF foi fraco nestes dados e só destaca tipos de atributo binário (dia não útil, valor redondo, mesmo usuário criando e aprovando).
+
+### Onde o ML agrega: a anomalia que ninguém previu
+
+`gerar_razao(desconhecidas=True)` cria um 13º tipo, `centro_custo_incomum` (conta usada com um centro de custo que
+quase nunca usa), para o qual **nenhuma regra nem detector estatístico foi escrito** (recall de 1%).
+
+A **fila exclusiva do ML** pega só lançamentos sem nenhum sinal de regra ou estatística e os ordena pelo score do
+Isolation Forest. Nos 100 primeiros, 34% são anomalias reais, contra uma taxa-base de 0,53% (lift de 63,6 vezes). Em 7
+sementes, a precision dos 100 primeiros ficou entre 32% e 50%.
+
+> O ML achou a anomalia porque o atributo de raridade conta-centro de custo estava na lista. Ele não adivinha
+> dimensões que ninguém forneceu: o ganho está em cobrir combinações sem escrever uma regra para cada uma.
+
+## Validação externa (v0.5)
+
+O pipeline também roda em uma base que não foi gerada por este projeto. O teste foi feito em uma base fictícia de
+500 mil lançamentos com 5 tipos de anomalia rotulados por outra pessoa (35 mil anomalias, 7%).
+
+### Como usar uma base nova
+
+```powershell
+python validar_base.py caminho\razao.csv --mapa usuario=usuario_criacao --plano-proprio --genericos --ml
+```
+
+- `--mapa coluna_no_arquivo=coluna_padrao` renomeia colunas (repetível). Obrigatórias: `data_lancamento`,
+  `conta_cosif`, `valor`. Opcionais: `tipo`, `centro_custo`, `usuario_criacao`, `usuario_aprovacao`, `origem`,
+  `historico`, `documento`.
+- **Colunas que faltam:** os detectores que dependem delas são desligados e o script informa quais e por quê.
+- `--plano-proprio`: a base usa contas fora do elenco COSIF do projeto (desliga `conta_invalida` e
+  `conta_fora_vigencia`; os detectores estatísticos passam a rodar em todas as contas).
+- `--desligar a,b`: desliga detectores sem poder de discriminação na base.
+- `--genericos`: inclui detectores de raridade que não dependem de plano, calendário ou perfil conhecido
+  (documento repetido, centro de custo raro para a conta, histórico raro, usuário com volume atípico).
+- Com `flag_anomalia` e `tipo_anomalia` na base, o script mede precision e recall; sem rótulo, só pontua e
+  salva os alertas para revisão manual (em `output/validacao/`).
+
+Em código: `carregar_razao(caminho, mapeamento=...)` e `aplicar_detectores(df, detectores, desligar=..., plano_proprio=...)`.
+
+### O que aconteceu na base de 500 mil lançamentos
+
+| Configuração | Sinalizados | Precision | Recall |
+|---|---|---|---|
+| Padrão do projeto, só com o mapeamento de colunas | 100% da base | 7,0% | 100% |
+| Calibrada (plano próprio, sem `dia_nao_util`, com detectores genéricos) | 7,0% da base | 99,7% | 99,9% |
+
+Recall por tipo na configuração calibrada: documento duplicado 99,3%; centro de custo incompatível, horário
+incomum, usuário incomum e valor fora do padrão, 100% cada. Tempo total: 13 segundos (10 s do Isolation Forest).
+
+O que a validação mostrou:
+
+1. **O padrão do projeto não serve sem calibrar.** Nenhuma conta da base está no elenco COSIF do projeto (os códigos
+   estão na estrutura anterior, com DV diferente), então `conta_invalida` marca 100% dos lançamentos. Os detectores
+   estatísticos também ficavam sem rodar por depender do elenco.
+2. **Há regras sem poder de discriminação.** 28,5% dos lançamentos (normais e anômalos) caem em fim de semana ou
+   feriado, então `dia_nao_util` não separa nada.
+3. **Só um detector original funcionava**, o `valor_atipico_conta`. Os demais tipos de anomalia (documento, centro de
+   custo, histórico, usuário) pediram detectores de raridade, o que motivou os genéricos.
+4. **Níveis de risco não transferem.** Os pesos foram calibrados no cenário sintético; aqui só 77 lançamentos chegam
+   a nível alto, e nível médio ou alto pega 40% do recall. Em outra base, é preciso recalibrar os pesos.
+5. **O Isolation Forest ficou atrás das regras:** AUC 0,993 e AP 0,919, contra 0,999 e 0,993 de regras + estatística.
+   Ele pegou só 42% dos usuários incomuns, porque o sinal está no volume do usuário (1,4% contra 1,0% dos demais).
+6. **Cuidado ao interpretar:** nesta base as anomalias se entregam por um valor categórico exato (centro de custo
+   "INEXISTENTE", um usuário, um texto de histórico). O resultado de ~100% mostra que o pipeline escala e se adapta,
+   e não mede a capacidade de achar anomalias sutis.
+
 ## Como rodar
 
 ```powershell
@@ -103,6 +196,9 @@ Saídas em `output/`: lançamentos sinalizados, resumo por tipo e resumo por det
 
 - O recall de 100% vem de anomalias injetadas com sinal forte. Em dados reais não há rótulo e a calibração dos limiares precisa de revisão manual.
 - Os limiares (z > 3,5, MAD de dígitos, pico) foram calibrados nestes dados sintéticos.
+- Na validação externa, os pesos e níveis de risco precisam ser recalibrados para cada base.
+- Os resultados de ML dependem do cenário sintético. A anomalia desconhecida foi criada por mim, então o teste mostra o mecanismo, não o desempenho em dados reais.
+- O LOF tem custo alto em bases grandes (centenas de milhares de linhas); o Isolation Forest escala melhor.
 - O calendário cobre só feriados nacionais bancários (sem estaduais e municipais).
 - Os falsos positivos vêm sobretudo dos detectores de triagem (dígitos, pico mensal), por isso pesam pouco no score.
 - O plano interno da instituição costuma ter contas próprias mapeadas ao COSIF; aqui o razão usa direto os códigos COSIF.

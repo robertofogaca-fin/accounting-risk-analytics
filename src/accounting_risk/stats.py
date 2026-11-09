@@ -50,7 +50,11 @@ def _so_plano(min_linhas: int = 0):
     contas com pouquíssimos lançamentos não sustentam uma estatística própria."""
     def decorador(funcao):
         def envolvida(df, **kwargs):
-            mascara = df["conta_cosif"].isin(CODIGOS_SET)
+            # base com plano de contas próprio (df.attrs["plano_proprio"]): não exige que a conta esteja no elenco COSIF
+            if df.attrs.get("plano_proprio"):
+                mascara = pd.Series(True, index=df.index)
+            else:
+                mascara = df["conta_cosif"].isin(CODIGOS_SET)
             if min_linhas:
                 mascara &= df["conta_cosif"].map(df["conta_cosif"].value_counts()) >= min_linhas
             resultado = funcao(df[mascara], **kwargs)
@@ -132,11 +136,11 @@ pico_mensal = _so_plano(30)(pico_mensal)
 
 ESTATISTICOS = [
     Detector("valor_atipico_conta", "Valor muito acima do padrão da conta (z-score robusto, escala log)", 5,
-             valor_atipico_conta, "valor_atipico_conta"),
+             valor_atipico_conta, "valor_atipico_conta", ("valor", "conta_cosif")),
     Detector("par_usuario_conta_raro", "Usuário lança em conta que raramente movimenta", 3,
-             par_usuario_conta_raro, "par_usuario_conta_raro"),
+             par_usuario_conta_raro, "par_usuario_conta_raro", ("valor", "conta_cosif", "usuario_criacao")),
     Detector("desvio_digitos_usuario", "Excesso de um primeiro dígito no perfil do usuário (tipo Benford)", 2,
-             desvio_digitos_usuario, "fracionamento_alcada"),
+             desvio_digitos_usuario, "fracionamento_alcada", ("valor", "conta_cosif", "usuario_criacao")),
     Detector("pico_mensal", "Volume mensal de lançamentos da conta fora do histórico (triagem por conta/mês)", 1,
-             pico_mensal, "pico_mensal"),
+             pico_mensal, "pico_mensal", ("valor", "conta_cosif", "data_lancamento")),
 ]
