@@ -11,7 +11,8 @@ Detecção de lançamentos contábeis anormais, evoluindo de **regras simples** 
 - [x] **v0.3** Plano COSIF completo (4.401 contas, 9 dígitos + DV): validação de DV e de vigência; calendário de feriados bancários
 - [x] **v0.4** Machine learning (Isolation Forest e LOF) e comparação regras × estatística × ML
 - [x] **v0.5** Validação externa: carregador de bases, desligamento automático de detectores e detectores genéricos de raridade
-- [ ] **v0.6** Dashboard Streamlit
+- [ ] **v0.6** Fraude que imita o padrão normal: fracionamento abaixo da alçada
+- [ ] **v0.7** Dashboard Streamlit
 
 ## Plano de contas COSIF
 
@@ -179,6 +180,37 @@ O que a validação mostrou:
 6. **Cuidado ao interpretar:** nesta base as anomalias se entregam por um valor categórico exato (centro de custo
    "INEXISTENTE", um usuário, um texto de histórico). O resultado de ~100% mostra que o pipeline escala e se adapta,
    e não mede a capacidade de achar anomalias sutis.
+
+## Fraude que imita o padrão normal (v0.6)
+
+A validação externa mostrou um limite: as anomalias da base se entregavam por um valor exato. A v0.6 testa o caso
+oposto, o **fracionamento abaixo da alçada**: um pagamento acima do limite do usuário quebrado em 2 a 5 lançamentos,
+cada um logo abaixo da alçada, para a mesma contraparte, em poucos dias. Cada parcela, sozinha, é normal.
+
+A base original não tem contraparte nem alçada; as duas foram criadas como premissas, com cuidado para não criar
+um novo vazamento. Parâmetros, premissas e controles estão em
+[docs/v0.6_especificacao_fracionamento.md](docs/v0.6_especificacao_fracionamento.md), escrito antes do detector.
+
+```powershell
+python gerar_base_v06.py data\razao_cosif_500k_7pct_anomalias.csv
+python avaliar_v06.py
+```
+
+| Método | Precision@1.000 | Eventos no top 1.000 | AUC fracionamento × normal |
+|---|---|---|---|
+| v0.5 regras + estatística | 0% | 0 de 300 | 0,506 |
+| v0.5 Isolation Forest | 0% | 0 de 300 | 0,491 |
+| v0.6 detector de fracionamento | 68% | 186 de 300 | 0,999 |
+
+- Os detectores da v0.5, que acertaram 99,7% das anomalias que se entregavam pelo valor, ficaram no nível do sorteio.
+- O detector novo agrupa por usuário, contraparte e conta numa janela de 7 dias e usa o cadastro de alçadas.
+  Como filtro, sinaliza 13% da base; como ordenação, 68% dos 1.000 primeiros alertas são fraude.
+- Ponto cego: fracionamento em 2 parcelas (4% achados no top 1.000, contra ~100% dos de 4 e 5 parcelas).
+
+**Relatório para quem revisa** (`output/validacao_v06/relatorio_fracionamento.xlsx`): os alertas viram uma fila de
+trabalho, com um grupo suspeito por linha (usuário, contraparte, conta e período), prioridade e ação sugerida.
+Nos 100 primeiros grupos, 98 são fraude; os 300 primeiros cobrem 74% dos eventos. Abas: Resumo, Fila_Revisao,
+Lancamentos_Fila, Curva_Revisao, Ponto_Cego e Premissas.
 
 ## Como rodar
 
